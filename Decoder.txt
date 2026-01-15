@@ -1,0 +1,66 @@
+%% IMAGE DECODER: Read custom binary (Script)
+
+clc; clear; close all;
+
+%% 1) Select encoded file
+[filename_in, pathname] = uigetfile('*.bin','Select encoded file');
+if isequal(filename_in,0)
+    error('No file selected');
+end
+filepath = fullfile(pathname, filename_in);
+
+fid = fopen(filepath,'rb');
+if fid == -1
+    error('Cannot open file');
+end
+
+%% 2) Read 4-bit header stored in 1 byte
+header4 = fread(fid,1,'uint8');
+if isempty(header4)
+    fclose(fid);
+    error('File too small (no header)');
+end
+
+% Top 2 bits = spatial resolution index, bottom 2 bits = bit-depth index
+res_idx   = bitshift(header4,-2);   % 0..3
+depth_idx = bitand(header4,3);      % 0..3
+
+% Map indices to actual values
+res_sizes  = [100 200 400 800];     % spatial resolutions
+bit_depths = [1 2 4 8];             % bit depths
+
+target_size = res_sizes(res_idx+1); % N x N
+b           = bit_depths(depth_idx+1);
+L           = 2^b;
+
+total_pixels = target_size * target_size;
+
+fprintf('\nDECODING %s\n', filename_in);
+fprintf('Header = %d (bin %s)\n', header4, dec2bin(header4,8));
+fprintf('  Spatial idx   = %d -> %dx%d\n', res_idx, target_size, target_size);
+fprintf('  Intensity idx = %d -> %d bits (%d levels)\n', depth_idx, b, L);
+
+%% 3) Read quantized pixels (indices 0..L-1)
+pixels = fread(fid, total_pixels, 'uint8');
+fclose(fid);
+if numel(pixels) ~= total_pixels
+    error('File size mismatch: expected %d pixels, got %d', total_pixels, numel(pixels));
+end
+
+Iquant = reshape(pixels, [target_size target_size]);   % 0..L-1
+
+%% 4) Dequantize indices back to 0..255 grayscale
+Iquant_d = double(Iquant);
+Irec     = uint8( (Iquant_d + 0.5) * 256 / L );        % reconstructed image
+
+% For viewing of quantized levels
+Iquant_vis = uint8(Iquant_d * (255/(L-1)));
+
+%% 5) Show and save reconstructed image
+figure(1); clf;
+subplot(1,2,1); imshow(Iquant_vis);
+title(sprintf('Quantized (%dx%d, %d bits)', target_size, target_size, b));
+subplot(1,2,2); imshow(Irec);
+title('Reconstructed 8-bit image');
+
+imwrite(Irec, 'Decoded_image.png');

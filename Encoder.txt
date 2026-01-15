@@ -1,0 +1,107 @@
+%% IMAGE ENCODER: Sampling + Quantization (Script)
+
+clc; clear; close all;
+
+%% 1) Image Input and Preprocessing
+[filename, pathname] = uigetfile({'*.jpg;*.jpeg;*.png;*.bmp','Image Files'});
+if isequal(filename,0)
+    error('No file selected');
+end
+I = imread(fullfile(pathname, filename));
+
+% Save original (for report)
+imwrite(I, 'Original.png');
+
+% Convert to grayscale
+if ndims(I) == 3
+    Igray = rgb2gray(I);
+else
+    Igray = I;
+end
+Igray = uint8(Igray);              % ensure 0..255
+
+% Central square crop
+[h,w] = size(Igray);
+N = min(h,w);
+row_start = floor((h-N)/2)+1;
+col_start = floor((w-N)/2)+1;
+Icrop = Igray(row_start:row_start+N-1, col_start:col_start+N-1);
+
+% Save cropped square
+imwrite(Icrop,'Cropped_Square_Original.png');
+
+%% 2) Spatial Resolution Selection (Sampling)
+res_options = {'100x100','200x200','400x400','800x800'};
+[choice_res, ok_res] = listdlg('PromptString','Select spatial resolution:', ...
+                               'SelectionMode','single', ...
+                               'ListString',res_options);
+if ~ok_res
+    error('No resolution selected');
+end
+
+res_sizes   = [100 200 400 800];
+target_size = res_sizes(choice_res);   % final N×N
+res_idx     = choice_res - 1;         % index 0..3
+
+Isampled = imresize(Icrop,[target_size target_size],'bilinear');
+Isampled = uint8(Isampled);
+
+% Save resized image
+fname_resized = sprintf('Resized_%dx%d_pixels.png', target_size, target_size);
+imwrite(Isampled, fname_resized);
+
+%% 3) Intensity Resolution Selection (Quantization)
+bit_options = {'1 bit (2 levels)','2 bits (4 levels)', ...
+               '4 bits (16 levels)','8 bits (256 levels)'};
+[choice_bit, ok_bit] = listdlg('PromptString','Select intensity resolution:', ...
+                               'SelectionMode','single', ...
+                               'ListString',bit_options);
+if ~ok_bit
+    error('No bit depth selected');
+end
+
+bit_depths = [1 2 4 8];
+b          = bit_depths(choice_bit);   % 1,2,4,8 bits
+depth_idx  = choice_bit - 1;           % 0..3
+L          = 2^b;                      % number of levels
+
+% Quantization: 0..255 -> 0..(L-1)
+Isampled_d = double(Isampled);
+Iquant     = uint8(floor(Isampled_d * L / 256));     % indices 0..L-1 [web:53]
+
+% For viewing: 0..(L-1) -> 0..255
+Iquant_vis = uint8(double(Iquant) * (255/(L-1)));
+
+% Save quantized image
+fname_quant = sprintf('Quantized_%dbits_%dlevels.png', b, L);
+imwrite(Iquant_vis, fname_quant);
+
+%% 4) Display (optional)
+figure(1); clf;
+subplot(2,2,1); imshow(I);           title('Original');
+subplot(2,2,2); imshow(Icrop);       title('Cropped square');
+subplot(2,2,3); imshow(Isampled);    title(sprintf('Resized %dx%d',target_size,target_size));
+subplot(2,2,4); imshow(Iquant_vis);  title(sprintf('Quantized %d bits',b));
+
+%% 5) Encoding: 4-bit Header + Binary File
+% 4-bit header layout: [2 bits spatial index][2 bits depth index]
+% res_idx:   0->100,1->200,2->400,3->800
+% depth_idx: 0->1bit,1->2bit,2->4bit,3->8bit
+header4 = bitor(bitshift(res_idx,2), depth_idx);     % (res_idx<<2) | depth_idx [web:61]
+
+% Custom file: byte0=header, then all pixels row-wise
+outname = sprintf('encoded_%dx%d_%dbit.bin', target_size, target_size, b);
+fid = fopen(outname,'wb');
+if fid==-1
+    error('Cannot create output file');
+end
+
+fwrite(fid, header4,   'uint8');     % header
+fwrite(fid, Iquant(:), 'uint8');     % pixel indices 0..L-1
+fclose(fid);
+
+fprintf('\nENCODER DONE\n');
+fprintf('Output file : %s\n', outname);
+fprintf('Header      : %d (bin %s)\n', header4, dec2bin(header4,8));
+fprintf('  res_idx   : %d -> %dx%d\n', res_idx, target_size, target_size);
+fprintf('  depth_idx : %d -> %d bits (%d levels)\n', depth_idx, b, L);
